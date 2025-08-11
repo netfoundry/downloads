@@ -1,127 +1,211 @@
 #!/usr/bin/env bash
 
-set -o errexit
-set -o nounset
-set -o pipefail
+###############################################################################
+# NetFoundry Linux Package Installer
+#
+# This script configures NetFoundry package repositories and optionally
+# installs specified packages from those repositories.
+#
+# Author: NetFoundry
+# License: All Rights Reserved
+# Usage: ./linux-install.bash [OPTIONS] [PACKAGE...]
+# Requirements: curl/wget, gpg, apt/dnf/yum
+# Version: 2.0.0
+###############################################################################
+
+set -euo pipefail
+
+# === Logging Setup ===
+LOG_FILE="/var/log/netfoundry-installer.log"
+if [[ ! -w "$(dirname "$LOG_FILE")" ]]; then
+  LOG_FILE="$HOME/netfoundry-installer.log"
+fi
+
+log_info() {
+  echo "[INFO] $*"
+}
+log_error() {
+  echo "[ERROR] $*" >&2
+}
+
+# Initialize log file if possible
+if touch "$LOG_FILE" 2>/dev/null; then
+  # Redirect all output (stdout & stderr) to tee for console + log file
+  exec > >(tee -a "$LOG_FILE") 2>&1
+  log_info "===== [START] $(date) - NetFoundry Package Installer ====="
+else
+  log_info "Note: Cannot write to log file, continuing without logging"
+fi
+
+# === Configuration ===
+# Repository configuration variables
+NFPAX_RPM="${NFPAX_RPM:-nfpax-netfoundry-rpm-stable}"
+NFPAX_DEB="${NFPAX_DEB:-nfpax-netfoundry-deb-stable}"
+NF_REPO_HOST="netfoundry.jfrog.io"
+NF_GPG_KEY_URL="https://get.netfoundry.io/netfoundry.asc"
 
 checkSum() {
     for CMD in sha256sum md5sum; do
-        if command -v $CMD &>/dev/null; then
-            local SUMCMD=$CMD
+        if command -v "$CMD" &>/dev/null; then
+            local SUMCMD="$CMD"
             break
         fi
     done
     if [ -z "${SUMCMD:-}" ]; then
-        echo "ERROR: No checksum command found. Tried 'sha256sum', 'md5sum'." >&2
+        log_error "No checksum command found. Tried 'sha256sum', 'md5sum'."
+        log_error "Please install coreutils or similar package containing checksum utilities."
         exit 1
     fi
-    $SUMCMD | awk '{print $1}'
+    "$SUMCMD" | awk '{print $1}'
 }
 
 configureRedHatRepo(){
+    log_info "Setting up NetFoundry repository for Red Hat family..."
+    
+    local PACKAGER=""
     for CMD in dnf yum; do
-        if command -v $CMD &>/dev/null; then
-            local PACKAGER=$CMD
+        if command -v "$CMD" &>/dev/null; then
+            PACKAGER="$CMD"
+            log_info "Found package manager: $PACKAGER"
             break
         fi
     done
-    if [ -z "${PACKAGER:-}" ]; then
-        echo "ERROR: No package manager found. Tried 'dnf', 'yum'." >&2
+    if [ -z "$PACKAGER" ]; then
+        log_error "No Red Hat package manager found. Tried 'dnf', 'yum'."
+        log_error "Please install dnf or yum package manager."
         exit 1
     fi
 
     local REPOSRC="[NetFoundryRelease]
 name=NetFoundry Release
-baseurl=https://netfoundry.jfrog.io/artifactory/${NFPAX_RPM:-nfpax-netfoundry-rpm-stable}/redhat/\$basearch
+baseurl=https://${NF_REPO_HOST}/artifactory/${NFPAX_RPM}/redhat/\$basearch
 enabled=1
 gpgcheck=0
-gpgkey=https://netfoundry.jfrog.io/artifactory/${NFPAX_RPM:-nfpax-netfoundry-rpm-stable}/redhat/\$basearch/repodata/repomd.xml.key
+gpgkey=https://${NF_REPO_HOST}/artifactory/${NFPAX_RPM}/redhat/\$basearch/repodata/repomd.xml.key
 repo_gpgcheck=1"
 
     local REPOFILE="/etc/yum.repos.d/netfoundry-release.repo"
-    if [ -s $REPOFILE ]; then
+    if [ -s "$REPOFILE" ]; then
+        log_info "Existing repository file found, checking for updates..."
         local EXISTINGSUM
         local REPOSUM
-        EXISTINGSUM=$(checkSum < $REPOFILE)
+        EXISTINGSUM=$(checkSum < "$REPOFILE")
         REPOSUM=$(checkSum <<< "$REPOSRC")
         if [ "$EXISTINGSUM" != "$REPOSUM" ]; then
-            mv -v $REPOFILE{,".$(date -Iseconds)"}
-            echo "$REPOSRC" > $REPOFILE
-            echo "Updated NetFoundry repository configuration"
+            local BACKUP_FILE="${REPOFILE}.$(date -Iseconds)"
+            mv "$REPOFILE" "$BACKUP_FILE"
+            log_info "Backed up existing repository file to: $BACKUP_FILE"
+            echo "$REPOSRC" > "$REPOFILE"
+            log_info "Updated NetFoundry repository configuration"
         else
-            echo "NetFoundry repository configuration is up to date"
+            log_info "NetFoundry repository configuration is up to date"
         fi
     else
-        echo "$REPOSRC" >| $REPOFILE
-        echo "Added NetFoundry repository configuration"
+        log_info "Creating new repository configuration file..."
+        echo "$REPOSRC" > "$REPOFILE"
+        log_info "Added NetFoundry repository configuration"
     fi
 }
 
 installRedHat(){
     configureRedHatRepo
     
+    local PACKAGER=""
     for CMD in dnf yum; do
-        if command -v $CMD &>/dev/null; then
-            local PACKAGER=$CMD
+        if command -v "$CMD" &>/dev/null; then
+            PACKAGER="$CMD"
             break
         fi
     done
 
-    $PACKAGER install --assumeyes "$@"
+    log_info "Installing packages: $*"
+    if ! "$PACKAGER" install --assumeyes "$@"; then
+        log_error "Package installation failed"
+        exit 1
+    fi
+    
+    log_info "Verifying installed packages..."
     for PKG in "$@"; do
-        $PACKAGER info "$PKG"
+        if "$PACKAGER" info "$PKG" >/dev/null 2>&1; then
+            log_info "Successfully installed: $PKG"
+        else
+            log_error "Failed to verify installation of: $PKG"
+        fi
     done
 }
 
 configureDebianRepo(){
+    log_info "Setting up NetFoundry repository for Debian family..."
+    
+    local GNUPGCMD=""
     for CMD in gpg gpg2; do
-        if command -v $CMD &>/dev/null; then
-            local GNUPGCMD=$CMD
+        if command -v "$CMD" &>/dev/null; then
+            GNUPGCMD="$CMD"
+            log_info "Found GnuPG command: $GNUPGCMD"
             break
         fi
     done
-    if [ -z "${GNUPGCMD:-}" ]; then
-        echo "ERROR: No GnuPG CLI found. Tried commands 'gpg', gpg2. Try installing 'gnupg'." >&2
+    if [ -z "$GNUPGCMD" ]; then
+        log_error "No GnuPG CLI found. Tried commands 'gpg', 'gpg2'."
+        log_error "Please install 'gnupg' package: apt-get install gnupg"
         exit 1
     fi
+    
+    local GETTER=""
+    local GETTERCMD=""
     for CMD in wget curl; do
-        if command -v $CMD &>/dev/null; then
-            local GETTER=$CMD
+        if command -v "$CMD" &>/dev/null; then
+            GETTER="$CMD"
             break
         fi
     done
-    if [ -z "${GETTER:-}" ]; then
-        echo "ERROR: No http client found. Tried 'wget', 'curl'." >&2
+    if [ -z "$GETTER" ]; then
+        log_error "No HTTP client found. Tried 'wget', 'curl'."
+        log_error "Please install wget or curl: apt-get install wget curl"
         exit 1
     else
-        case $GETTER in
+        case "$GETTER" in
             wget)
                 GETTERCMD="wget -qO-"
+                log_info "Using wget for HTTP requests"
                 ;;
             curl)
                 GETTERCMD="curl -fsSL"
+                log_info "Using curl for HTTP requests"
                 ;;
         esac
     fi
 
-    # always update the pubkey
-    $GETTERCMD https://get.netfoundry.io/netfoundry.asc \
-    | $GNUPGCMD --batch --yes --dearmor --output /usr/share/keyrings/netfoundry.gpg
-    chmod a+r /usr/share/keyrings/netfoundry.gpg
+    # Always update the GPG public key
+    log_info "Downloading and installing NetFoundry GPG key..."
+    local KEYRING_FILE="/usr/share/keyrings/netfoundry.gpg"
+    mkdir -p "$(dirname "$KEYRING_FILE")"
+    if $GETTERCMD "$NF_GPG_KEY_URL" | $GNUPGCMD --batch --yes --dearmor --output "$KEYRING_FILE"; then
+        chmod 644 "$KEYRING_FILE"
+        log_info "Successfully installed NetFoundry GPG key"
+    else
+        log_error "Failed to download or install NetFoundry GPG key"
+        exit 1
+    fi
 
     # Detect APT version to determine repository format
+    log_info "Detecting APT version for optimal repository format..."
     local APT_VERSION
     local USE_DEB822="no"
     APT_VERSION=$(apt --version 2>/dev/null | awk '{ print $2 }' | head -n 1)
     if [[ -n "$APT_VERSION" && ( "$APT_VERSION" == 2.* || "$APT_VERSION" =~ 1\.[89]* ) ]]; then
         USE_DEB822="yes"
+        log_info "APT version $APT_VERSION supports DEB822 format"
+    else
+        log_info "APT version $APT_VERSION requires legacy format"
     fi
 
     local REPODIR="/etc/apt/sources.list.d"
     local REPO_BASE_NAME="netfoundry-release"
-    local REPO_URL="https://netfoundry.jfrog.io/artifactory/${NFPAX_DEB:-nfpax-netfoundry-deb-stable}"
+    local REPO_URL="https://${NF_REPO_HOST}/artifactory/${NFPAX_DEB}"
     
     # Remove old repository files (both formats)
+    log_info "Cleaning up any existing repository files..."
     rm -f "${REPODIR}/${REPO_BASE_NAME}.list" "${REPODIR}/${REPO_BASE_NAME}.sources"
     
     if [[ "$USE_DEB822" == "yes" ]]; then
@@ -134,16 +218,21 @@ Suites: debian
 Components: main
 Signed-By: /usr/share/keyrings/netfoundry.gpg
 EOF
-        echo "Added NetFoundry repository configuration (DEB822 format)"
+        log_info "Added NetFoundry repository configuration (DEB822 format)"
     else
         # Use legacy format (.list file)
         local REPOFILE="${REPODIR}/${REPO_BASE_NAME}.list"
         local REPOSRC="deb [signed-by=/usr/share/keyrings/netfoundry.gpg] ${REPO_URL} debian main"
         echo "$REPOSRC" > "$REPOFILE"
-        echo "Added NetFoundry repository configuration (legacy format)"
+        log_info "Added NetFoundry repository configuration (legacy format)"
     fi
 
-    apt-get update
+    log_info "Updating APT package metadata..."
+    if ! apt-get update; then
+        log_error "Failed to update APT package metadata"
+        exit 1
+    fi
+    log_info "Successfully updated APT package metadata"
 }
 
 installDebian(){
@@ -153,11 +242,25 @@ installDebian(){
     # allow dangerous downgrades if a version is pinned with '='
     if [[ "${*}" =~ = ]]; then
         APT_ARGS+=(--allow-downgrades)
+        log_info "Allowing downgrades for pinned package versions"
     fi
+    
+    log_info "Installing packages: $*"
     # shellcheck disable=SC2068
-    apt-get ${APT_ARGS[@]} "$@"
+    if ! apt-get ${APT_ARGS[@]} "$@"; then
+        log_error "Package installation failed"
+        exit 1
+    fi
+    
+    log_info "Verifying installed packages..."
     for PKG in "$@"; do
-        apt-cache show "${PKG%=*}=$(dpkg-query -W -f='${Version}' "${PKG%=*}")"
+        if dpkg-query -W "${PKG%=*}" >/dev/null 2>&1; then
+            local VERSION
+            VERSION=$(dpkg-query -W -f='${Version}' "${PKG%=*}")
+            log_info "Successfully installed: ${PKG%=*} version $VERSION"
+        else
+            log_error "Failed to verify installation of: ${PKG%=*}"
+        fi
     done
 }
 
@@ -185,6 +288,36 @@ Supported distributions: Debian, Ubuntu, CentOS, RHEL, Fedora, Amazon Linux
 EOF
 }
 
+detectDistribution() {
+    local DISTRO_FAMILY=""
+    local DISTRO_NAME="unknown"
+    
+    # Enhanced distribution detection
+    if [[ -f /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        source /etc/os-release
+        DISTRO_NAME="${PRETTY_NAME:-${NAME:-${ID:-unknown}}}"
+    fi
+    
+    # Detect Red Hat family
+    if [[ -f /etc/redhat-release || -f /etc/amazon-linux-release || -f /etc/centos-release ]]; then
+        DISTRO_FAMILY="redhat"
+    elif [[ -f /etc/debian_version ]]; then
+        DISTRO_FAMILY="debian"
+    elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+        # Fallback: if we have dnf/yum, assume Red Hat family
+        DISTRO_FAMILY="redhat"
+        log_info "Distribution detection fallback: found dnf/yum, assuming Red Hat family" >&2
+    elif command -v apt-get >/dev/null 2>&1; then
+        # Fallback: if we have apt-get, assume Debian family
+        DISTRO_FAMILY="debian"
+        log_info "Distribution detection fallback: found apt-get, assuming Debian family" >&2
+    fi
+    
+    log_info "Detected distribution: $DISTRO_NAME" >&2
+    echo "$DISTRO_FAMILY"
+}
+
 main(){
     # Check for help flags
     if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -192,28 +325,52 @@ main(){
         exit 0
     fi
     
+    log_info "Starting NetFoundry package installer..."
+    
     # Detect the system's distribution family
-    if [[ -f /etc/redhat-release || -f  /etc/amazon-linux-release ]]; then
-        if (( $# )); then
-            installRedHat "$@"
-        else
-            echo "Configuring NetFoundry repository for Red Hat family..."
-            configureRedHatRepo
-            echo "Repository configured. You can now install packages with: dnf install <package> or yum install <package>"
-        fi
-    elif [ -f /etc/debian_version ]; then
-        if (( $# )); then
-            installDebian "$@"
-        else
-            echo "Configuring NetFoundry repository for Debian family..."
-            configureDebianRepo
-            echo "Repository configured. You can now install packages with: apt-get install <package>"
-        fi
+    local DISTRO_FAMILY
+    DISTRO_FAMILY=$(detectDistribution)
+    
+    case "$DISTRO_FAMILY" in
+        "redhat")
+            if (( $# )); then
+                log_info "Installing packages on Red Hat family system..."
+                installRedHat "$@"
+            else
+                log_info "Configuring NetFoundry repository for Red Hat family..."
+                configureRedHatRepo
+                log_info "Repository configured. You can now install packages with: dnf install <package> or yum install <package>"
+            fi
+            ;;
+        "debian")
+            if (( $# )); then
+                log_info "Installing packages on Debian family system..."
+                installDebian "$@"
+            else
+                log_info "Configuring NetFoundry repository for Debian family..."
+                configureDebianRepo
+                log_info "Repository configured. You can now install packages with: apt-get install <package>"
+            fi
+            ;;
+        *)
+            log_error "Unsupported Linux distribution family: $DISTRO_FAMILY"
+            log_error "NetFoundry packages are available for Debian and Red Hat family distributions."
+            log_error "Supported: Ubuntu, Debian, CentOS, RHEL, Fedora, Amazon Linux, etc."
+            exit 1
+            ;;
+    esac
+    
+    if (( $# )); then
+        log_info "Package installation completed successfully"
     else
-        echo "ERROR: Unsupported Linux distribution family. NetFoundry packages are available for Debian and Red Hat family of distros." >&2
-        exit 1
+        log_info "Repository configuration completed successfully"
     fi
 }
 
 # ensure the script is not executed before it is fully downloaded if curl'd to bash
 main "$@"
+
+# Log completion if logging is available
+if [[ -w "$LOG_FILE" ]]; then
+    log_info "===== [END] $(date) - NetFoundry Package Installer ====="
+fi
