@@ -3,8 +3,9 @@
 ###############################################################################
 # NetFoundry Linux Package Installer
 #
-# This script configures NetFoundry package repositories and optionally
-# installs specified packages from those repositories.
+# This script configures NetFoundry package repositories (public or private)
+# and optionally installs specified packages from those repositories.
+# You can also run a post-install executable after package installation.
 #
 # Author: NetFoundry
 # License: All Rights Reserved
@@ -39,10 +40,12 @@ fi
 
 # === Configuration ===
 # Repository configuration variables
-NFPAX_RPM="${NFPAX_RPM:-nfpax-netfoundry-rpm-stable}"
-NFPAX_DEB="${NFPAX_DEB:-nfpax-netfoundry-deb-stable}"
 NF_REPO_HOST="netfoundry.jfrog.io"
-NF_GPG_KEY_URL="https://get.netfoundry.io/netfoundry.asc"
+
+PRIVATE_REPO="false"
+REPO_USERNAME=""
+REPO_PASSWORD=""
+POST_EXEC=""
 
 checkSum() {
     for CMD in sha256sum md5sum; do
@@ -61,7 +64,7 @@ checkSum() {
 
 configureRedHatRepo(){
     log_info "Setting up NetFoundry repository for Red Hat family..."
-    
+
     local PACKAGER=""
     for CMD in dnf yum; do
         if command -v "$CMD" &>/dev/null; then
@@ -81,7 +84,7 @@ name=NetFoundry Release
 baseurl=https://${NF_REPO_HOST}/artifactory/${NFPAX_RPM}/redhat/\$basearch
 enabled=1
 gpgcheck=0
-gpgkey=https://${NF_REPO_HOST}/artifactory/${NFPAX_RPM}/redhat/\$basearch/repodata/repomd.xml.key
+gpgkey=https://${NF_REPO_HOST}/artifactory/api/security/keypair/public/repositories/${NFPAX_RPM}
 repo_gpgcheck=1"
 
     local REPOFILE="/etc/yum.repos.d/netfoundry-release.repo"
@@ -105,11 +108,19 @@ repo_gpgcheck=1"
         echo "$REPOSRC" > "$REPOFILE"
         log_info "Added NetFoundry repository configuration"
     fi
+
+    if [[ "$PRIVATE_REPO" == "true" ]]; then
+        "$PACKAGER" config-manager --save --setopt=NetFoundryRelease.username="$REPO_USERNAME" NetFoundryRelease
+        "$PACKAGER" config-manager --save --setopt=NetFoundryRelease.password="$REPO_PASSWORD" NetFoundryRelease
+        log_info "Applied private repo credentials"
+    fi
+
+    "$PACKAGER" makecache -y
 }
 
 installRedHat(){
     configureRedHatRepo
-    
+
     local PACKAGER=""
     for CMD in dnf yum; do
         if command -v "$CMD" &>/dev/null; then
@@ -123,7 +134,7 @@ installRedHat(){
         log_error "Package installation failed"
         exit 1
     fi
-    
+
     log_info "Verifying installed packages..."
     for PKG in "$@"; do
         if "$PACKAGER" info "$PKG" >/dev/null 2>&1; then
@@ -136,7 +147,7 @@ installRedHat(){
 
 configureDebianRepo(){
     log_info "Setting up NetFoundry repository for Debian family..."
-    
+
     local GNUPGCMD=""
     for CMD in gpg gpg2; do
         if command -v "$CMD" &>/dev/null; then
@@ -150,7 +161,7 @@ configureDebianRepo(){
         log_error "Please install 'gnupg' package: apt-get install gnupg"
         exit 1
     fi
-    
+
     local GETTER=""
     local GETTERCMD=""
     for CMD in wget curl; do
@@ -180,7 +191,8 @@ configureDebianRepo(){
     log_info "Downloading and installing NetFoundry GPG key..."
     local KEYRING_FILE="/usr/share/keyrings/netfoundry.gpg"
     mkdir -p "$(dirname "$KEYRING_FILE")"
-    if $GETTERCMD "$NF_GPG_KEY_URL" | $GNUPGCMD --batch --yes --dearmor --output "$KEYRING_FILE"; then
+    if $GETTERCMD "https://${NF_REPO_HOST}/artifactory/api/security/keypair/public/repositories/${NFPAX_DEB}" \
+       | $GNUPGCMD --batch --yes --dearmor --output "$KEYRING_FILE"; then
         chmod 644 "$KEYRING_FILE"
         log_info "Successfully installed NetFoundry GPG key"
     else
@@ -203,18 +215,18 @@ configureDebianRepo(){
     local REPODIR="/etc/apt/sources.list.d"
     local REPO_BASE_NAME="netfoundry-release"
     local REPO_URL="https://${NF_REPO_HOST}/artifactory/${NFPAX_DEB}"
-    
+
     # Remove old repository files (both formats)
     log_info "Cleaning up any existing repository files..."
     rm -f "${REPODIR}/${REPO_BASE_NAME}.list" "${REPODIR}/${REPO_BASE_NAME}.sources"
-    
+
     if [[ "$USE_DEB822" == "yes" ]]; then
         # Use modern DEB822 format (.sources file)
         local REPOFILE="${REPODIR}/${REPO_BASE_NAME}.sources"
         cat > "$REPOFILE" << EOF
 Types: deb
 URIs: ${REPO_URL}
-Suites: debian
+Suites: debian stable
 Components: main
 Signed-By: /usr/share/keyrings/netfoundry.gpg
 EOF
@@ -222,9 +234,22 @@ EOF
     else
         # Use legacy format (.list file)
         local REPOFILE="${REPODIR}/${REPO_BASE_NAME}.list"
-        local REPOSRC="deb [signed-by=/usr/share/keyrings/netfoundry.gpg] ${REPO_URL} debian main"
-        echo "$REPOSRC" > "$REPOFILE"
+    local REPOSRC_DEBIAN="deb [signed-by=/usr/share/keyrings/netfoundry.gpg] ${REPO_URL} debian main"
+    local REPOSRC_STABLE="deb [signed-by=/usr/share/keyrings/netfoundry.gpg] ${REPO_URL} stable main"
+    echo "$REPOSRC_DEBIAN" > "$REPOFILE"
+    echo "$REPOSRC_STABLE" >> "$REPOFILE"
         log_info "Added NetFoundry repository configuration (legacy format)"
+    fi
+
+    if [[ "$PRIVATE_REPO" == "true" ]]; then
+        install -d -m 0700 /etc/apt/auth.conf.d
+        cat > /etc/apt/auth.conf.d/netfoundry.conf <<EOF
+machine ${NF_REPO_HOST}
+login ${REPO_USERNAME}
+password ${REPO_PASSWORD}
+EOF
+        chmod 600 /etc/apt/auth.conf.d/netfoundry.conf
+        log_info "Private repo credentials written to /etc/apt/auth.conf.d/netfoundry.conf"
     fi
 
     log_info "Updating APT package metadata..."
@@ -237,21 +262,21 @@ EOF
 
 installDebian(){
     configureDebianRepo
-    
+
     typeset -a APT_ARGS=(install --yes)
     # allow dangerous downgrades if a version is pinned with '='
     if [[ "${*}" =~ = ]]; then
         APT_ARGS+=(--allow-downgrades)
         log_info "Allowing downgrades for pinned package versions"
     fi
-    
+
     log_info "Installing packages: $*"
     # shellcheck disable=SC2068
     if ! apt-get ${APT_ARGS[@]} "$@"; then
         log_error "Package installation failed"
         exit 1
     fi
-    
+
     log_info "Verifying installed packages..."
     for PKG in "$@"; do
         if dpkg-query -W "${PKG%=*}" >/dev/null 2>&1; then
@@ -272,10 +297,16 @@ Usage: $(basename "${BASH_SOURCE[0]:-$0}") [OPTIONS] [PACKAGE...]
 
 Behaviors:
   1. No arguments     - Configure NetFoundry repository only
-  2. With arguments   - Configure repository and install specified packages
+  2. With single argument   - Configure repository and install specified packages
+  3. With multiple arguments - Configure private repository, install specified packages & optionally run post-exec
+
 
 Options:
-  -h, --help         Show this help message
+  --private              Configure private repository (requires --username and --password)
+  --username <user>      Username for private repo
+  --password <pass>      Password for private repo
+  --post-exec <file>     Executable to run after package installation
+  -h, --help             Show this help message
 
 Examples:
   # Configure repository only
@@ -284,6 +315,8 @@ Examples:
   # Configure repository and install packages
   curl -sSL https://get.netfoundry.io/install.bash | sudo bash -s frontdoor-agent
 
+  # Configure private repository and install packages
+   curl -sSL https://get.netfoundry.io/install.bash | sudo bash -s --private --username myuser --password mypass frontdoor-agent
 Supported distributions: Debian, Ubuntu, CentOS, RHEL, Fedora, Amazon Linux
 EOF
 }
@@ -291,14 +324,14 @@ EOF
 detectDistribution() {
     local DISTRO_FAMILY=""
     local DISTRO_NAME="unknown"
-    
+
     # Enhanced distribution detection
     if [[ -f /etc/os-release ]]; then
         # shellcheck disable=SC1091
         source /etc/os-release
         DISTRO_NAME="${PRETTY_NAME:-${NAME:-${ID:-unknown}}}"
     fi
-    
+
     # Detect Red Hat family
     if [[ -f /etc/redhat-release || -f /etc/amazon-linux-release || -f /etc/centos-release ]]; then
         DISTRO_FAMILY="redhat"
@@ -313,7 +346,7 @@ detectDistribution() {
         DISTRO_FAMILY="debian"
         log_info "Distribution detection fallback: found apt-get, assuming Debian family" >&2
     fi
-    
+
     log_info "Detected distribution: $DISTRO_NAME" >&2
     echo "$DISTRO_FAMILY"
 }
@@ -324,13 +357,38 @@ main(){
         showHelp
         exit 0
     fi
-    
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --private)   PRIVATE_REPO="true"; shift ;;
+            --username)  REPO_USERNAME="$2"; shift 2 ;;
+            --password)  REPO_PASSWORD="$2"; shift 2 ;;
+            --post-exec) POST_EXEC="$2"; shift 2 ;;
+            --) shift; break ;;
+            -*) log_error "Unknown option: $1"; exit 1 ;;
+            *) break ;;
+        esac
+    done
+
+    if [[ "$PRIVATE_REPO" == "true" ]]; then
+        NFPAX_RPM="${NFPAX_RPM:-nfpax-private-rpm-stable}"
+        NFPAX_DEB="${NFPAX_DEB:-nfpax-private-deb-stable}"
+    else
+        NFPAX_RPM="${NFPAX_RPM:-nfpax-public-rpm-stable}"
+        NFPAX_DEB="${NFPAX_DEB:-nfpax-public-deb-stable}"
+    fi
+
+    if [[ "$PRIVATE_REPO" == "true" && ( -z "$REPO_USERNAME" || -z "$REPO_PASSWORD" ) ]]; then
+        log_error "--private requires both --username and --password"
+        exit 1
+    fi
+
     log_info "Starting NetFoundry package installer..."
     
     # Detect the system's distribution family
     local DISTRO_FAMILY
     DISTRO_FAMILY=$(detectDistribution)
-    
+
     case "$DISTRO_FAMILY" in
         "redhat")
             if (( $# )); then
@@ -359,9 +417,13 @@ main(){
             exit 1
             ;;
     esac
-    
+
     if (( $# )); then
         log_info "Package installation completed successfully"
+        if [[ -n "$POST_EXEC" && -x "$POST_EXEC" ]]; then
+            log_info "Running post-install executable: $POST_EXEC"
+            "$POST_EXEC" || log_error "Post-install executable failed"
+        fi
     else
         log_info "Repository configuration completed successfully"
     fi
