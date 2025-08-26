@@ -223,10 +223,14 @@ configureDebianRepo(){
     if [[ "$USE_DEB822" == "yes" ]]; then
         # Use modern DEB822 format (.sources file)
         local REPOFILE="${REPODIR}/${REPO_BASE_NAME}.sources"
+        local REPO_SUITES="debian"
+        if [[ "$PRIVATE_REPO" == "true" ]]; then
+            REPO_SUITES="debian stable"
+        fi
         cat > "$REPOFILE" << EOF
 Types: deb
 URIs: ${REPO_URL}
-Suites: debian stable
+Suites: ${REPO_SUITES}
 Components: main
 Signed-By: /usr/share/keyrings/netfoundry.gpg
 EOF
@@ -234,10 +238,12 @@ EOF
     else
         # Use legacy format (.list file)
         local REPOFILE="${REPODIR}/${REPO_BASE_NAME}.list"
-    local REPOSRC_DEBIAN="deb [signed-by=/usr/share/keyrings/netfoundry.gpg] ${REPO_URL} debian main"
-    local REPOSRC_STABLE="deb [signed-by=/usr/share/keyrings/netfoundry.gpg] ${REPO_URL} stable main"
-    echo "$REPOSRC_DEBIAN" > "$REPOFILE"
-    echo "$REPOSRC_STABLE" >> "$REPOFILE"
+        local REPOSRC_DEBIAN="deb [signed-by=/usr/share/keyrings/netfoundry.gpg] ${REPO_URL} debian main"
+        echo "$REPOSRC_DEBIAN" > "$REPOFILE"
+        if [[ "$PRIVATE_REPO" == "true" ]]; then
+            local REPOSRC_STABLE="deb [signed-by=/usr/share/keyrings/netfoundry.gpg] ${REPO_URL} stable main"
+            echo "$REPOSRC_STABLE" >> "$REPOFILE"
+        fi
         log_info "Added NetFoundry repository configuration (legacy format)"
     fi
 
