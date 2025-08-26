@@ -11,7 +11,7 @@
 # License: All Rights Reserved
 # Usage: ./linux-install.bash [OPTIONS] [PACKAGE...]
 # Requirements: curl/wget, gpg, apt/dnf/yum
-# Version: 2.0.0
+# Version: 2.1.0
 ###############################################################################
 
 set -euo pipefail
