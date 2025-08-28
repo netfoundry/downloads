@@ -11,7 +11,7 @@
 # License: All Rights Reserved
 # Usage: ./linux-install.bash [OPTIONS] [PACKAGE...]
 # Requirements: curl/wget, gpg, apt/dnf/yum
-# Version: 2.1.0
+# Version: 2.2.0
 ###############################################################################
 
 set -euo pipefail
@@ -46,6 +46,7 @@ PRIVATE_REPO="false"
 REPO_USERNAME=""
 REPO_PASSWORD=""
 POST_EXEC=""
+TEST_REPO="false"
 
 checkSum() {
     for CMD in sha256sum md5sum; do
@@ -312,6 +313,7 @@ Options:
   --username <user>      Username for private repo
   --password <pass>      Password for private repo
   --post-exec <file>     Executable to run after package installation
+  --test                 Use test repositories instead of stable
   -h, --help             Show this help message
 
 Examples:
@@ -370,18 +372,30 @@ main(){
             --username)  REPO_USERNAME="$2"; shift 2 ;;
             --password)  REPO_PASSWORD="$2"; shift 2 ;;
             --post-exec) POST_EXEC="$2"; shift 2 ;;
+            --test)      TEST_REPO="true"; shift ;;
             --) shift; break ;;
             -*) log_error "Unknown option: $1"; exit 1 ;;
             *) break ;;
         esac
     done
 
+    # Update repo variables based on test/stable selection
     if [[ "$PRIVATE_REPO" == "true" ]]; then
-        NFPAX_RPM="${NFPAX_RPM:-nfpax-private-rpm-stable}"
-        NFPAX_DEB="${NFPAX_DEB:-nfpax-private-deb-stable}"
+        if [[ "$TEST_REPO" == "true" ]]; then
+            NFPAX_RPM="${NFPAX_RPM:-nfpax-private-rpm-test}"
+            NFPAX_DEB="${NFPAX_DEB:-nfpax-private-deb-test}"
+        else
+            NFPAX_RPM="${NFPAX_RPM:-nfpax-private-rpm-stable}"
+            NFPAX_DEB="${NFPAX_DEB:-nfpax-private-deb-stable}"
+        fi
     else
-        NFPAX_RPM="${NFPAX_RPM:-nfpax-public-rpm-stable}"
-        NFPAX_DEB="${NFPAX_DEB:-nfpax-public-deb-stable}"
+        if [[ "$TEST_REPO" == "true" ]]; then
+            NFPAX_RPM="${NFPAX_RPM:-nfpax-public-rpm-test}"
+            NFPAX_DEB="${NFPAX_DEB:-nfpax-public-deb-test}"
+        else
+            NFPAX_RPM="${NFPAX_RPM:-nfpax-public-rpm-stable}"
+            NFPAX_DEB="${NFPAX_DEB:-nfpax-public-deb-stable}"
+        fi
     fi
 
     if [[ "$PRIVATE_REPO" == "true" && ( -z "$REPO_USERNAME" || -z "$REPO_PASSWORD" ) ]]; then
