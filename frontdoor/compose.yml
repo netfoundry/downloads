@@ -1,0 +1,40 @@
+    name: NF Frontdoor
+    services:
+      init-frontdoor-volume:
+        image: busybox:1.36
+        user: "0:0"
+        command:
+          - sh
+          - -euxc
+          - |
+            chown -Rc ${PUID:-65534}:${PGID:-65534} /mnt
+            chmod -Rc ug+rwX,o-rwx /mnt
+        volumes:
+          - frontdoor_agent:/mnt
+        restart: no
+      frontdoor-agent:
+        image: quay.io/netfoundry/frontdoor-agent:${FRONTDOOR_AGENT_IMAGE_TAG:-latest}
+        entrypoint:
+          - bash
+          - -euc
+          - |
+            umask 0007
+            rm -f ~/.frontdoor/agent.socket
+            echo "DEBUG: running: 'frontdoor-agent $${@}'"
+            exec frontdoor-agent "$${@}"
+        command:
+          - --
+          - start
+        working_dir: /mnt
+        environment:
+          HOME: /mnt
+          PFXLOG_NO_JSON: "true"
+        depends_on:
+          init-frontdoor-volume:
+            condition: service_completed_successfully
+        user: "${PUID:-65534}:${PGID:-65534}"
+        restart: unless-stopped
+        volumes:
+          - frontdoor_agent:/mnt
+    volumes:
+      frontdoor_agent:
