@@ -81,8 +81,10 @@ configureRedHatRepo(){
     fi
 
     local BASE_URL=https://${NF_REPO_HOST}/artifactory/${NFPAX_RPM}/redhat/\$basearch
+    local REPOFILE="/etc/yum.repos.d/netfoundry-release.repo"
     if [[ "$PRIVATE_REPO" == "true" ]]; then
         local BASE_URL=https://${NF_REPO_HOST}/artifactory/${NFPAX_RPM}
+        local REPOFILE="/etc/yum.repos.d/netfoundry-private-release.repo"
     fi
 
     local REPOSRC="[NetFoundryRelease]
@@ -93,7 +95,6 @@ gpgcheck=0
 gpgkey=https://${NF_REPO_HOST}/artifactory/api/security/keypair/public/repositories/${NFPAX_RPM}
 repo_gpgcheck=1"
 
-    local REPOFILE="/etc/yum.repos.d/netfoundry-release.repo"
     if [ -s "$REPOFILE" ]; then
         log_info "Existing repository file found, checking for updates..."
         local EXISTINGSUM
