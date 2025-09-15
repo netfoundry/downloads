@@ -80,10 +80,9 @@ configureRedHatRepo(){
         exit 1
     fi
 
+    local BASE_URL=https://${NF_REPO_HOST}/artifactory/${NFPAX_RPM}/redhat/\$basearch
     if [[ "$PRIVATE_REPO" == "true" ]]; then
-        BASE_URL=https://${NF_REPO_HOST}/artifactory/${NFPAX_RPM}
-    else
-        BASE_URL=https://${NF_REPO_HOST}/artifactory/${NFPAX_RPM}/redhat/\$basearch
+        local BASE_URL=https://${NF_REPO_HOST}/artifactory/${NFPAX_RPM}
     fi
 
     local REPOSRC="[NetFoundryRelease]
