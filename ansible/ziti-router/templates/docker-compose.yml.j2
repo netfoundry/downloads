@@ -1,0 +1,36 @@
+services:
+  ziti-router:
+    image: "{{ ziti_router_image_repo }}:{{ ziti_router_image_tag }}"
+    container_name: ziti-router
+    network_mode: "{{ ziti_router_network_mode }}"
+    user: "{{ ziti_container_run_user }}"
+{% if ziti_container_cap_add | length > 0 %}
+    cap_add:
+{% for capability in ziti_container_cap_add %}
+      - {{ capability }}
+{% endfor %}
+{% endif %}
+{% if (ZITI_ROUTER_MODE | lower) == 'tproxy' %}
+    cap_drop:
+      - ALL
+{% endif %}
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - "{{ ziti_router_data_dir }}:/ziti-router:rw"
+    restart: unless-stopped
+    command: run config.yml
+    environment:
+      ZITI_BOOTSTRAP_CONFIG: "false"
+      ZITI_BOOTSTRAP_ENROLLMENT: "true"
+      ZITI_AUTO_RENEW_CERTS: "true"
+    healthcheck:
+      test:
+        - CMD
+        - ziti
+        - agent
+        - stats
+      interval: 3s
+      timeout: 3s
+      retries: 5

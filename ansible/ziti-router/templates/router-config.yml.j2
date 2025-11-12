@@ -1,0 +1,59 @@
+v: 3
+
+identity:
+  cert: "/ziti-router/router.cert"
+  server_cert: "/ziti-router/router.server.chain.cert"
+  key: "/ziti-router/router.key"
+  ca: "/ziti-router/router.cas"
+
+ctrl:
+  endpoint: "tls:{{ ZITI_CTRL_ADVERTISED_ADDRESS }}:{{ ZITI_CTRL_ADVERTISED_PORT }}"
+
+link:
+  dialers:
+    - binding: transport
+  listeners:
+    - binding: transport
+      bind: "tls:0.0.0.0:{{ ZITI_ROUTER_PORT }}"
+      advertise: "tls:{{ ZITI_ROUTER_ADVERTISED_ADDRESS }}:{{ ZITI_ROUTER_PORT }}"
+      options:
+        outQueueSize: {{ router_link_out_queue_size }}
+
+listeners:
+  - binding: edge
+    address: "tls:0.0.0.0:{{ ZITI_ROUTER_PORT }}"
+    options:
+      advertise: "{{ ZITI_ROUTER_ADVERTISED_ADDRESS }}:{{ ZITI_ROUTER_PORT }}"
+      connectTimeoutMs: {{ router_edge_connect_timeout_ms }}
+      getSessionTimeout: {{ router_edge_session_timeout_seconds }}
+  - binding: tunnel
+    options:
+      mode: "{{ ZITI_ROUTER_MODE }}"
+{% if ZITI_ROUTER_MODE | lower == 'tproxy' %}
+      lanIf: "{{ router_tunnel_lan_if }}"
+      resolver: "{{ router_tunnel_resolver }}"
+      dnsSvcIpRange: "{{ router_tunnel_dns_range }}"
+      dnsUpstream: "{{ router_tunnel_dns_upstream }}"
+{% endif %}
+
+edge:
+  csr:
+    country: "{{ router_edge_csr.country }}"
+    province: "{{ router_edge_csr.province }}"
+    locality: "{{ router_edge_csr.locality }}"
+    organization: "{{ router_edge_csr.organization }}"
+    organizationalUnit: "{{ router_edge_csr.organizational_unit }}"
+    sans:
+      dns:
+        - localhost
+{% for dns_san in router_edge_csr.extra_dns_sans %}        - "{{ dns_san }}"
+{% endfor %}      ip:
+{% for ip_san in router_edge_csr.extra_ip_sans %}        - "{{ ip_san }}"
+{% endfor %}
+
+forwarder:
+  latencyProbeInterval: {{ router_forwarder.latency_probe_interval_seconds }}
+  xgressDialQueueLength: {{ router_forwarder.xgress_dial_queue_length }}
+  xgressDialWorkerCount: {{ router_forwarder.xgress_dial_worker_count }}
+  linkDialQueueLength: {{ router_forwarder.link_dial_queue_length }}
+  linkDialWorkerCount: {{ router_forwarder.link_dial_worker_count }}
