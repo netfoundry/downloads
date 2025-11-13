@@ -15,7 +15,7 @@
     docker_compose_project_dir: /opt/netfoundry/ziti/ziti-router
     ziti_router_data_dir: "{{ docker_compose_project_dir | dirname }}/ziti-router-data"
     docker_daemon_config_path: /etc/docker/daemon.json
-    hardening_script_url: "https://objectstorage.us-ashburn-1.oraclecloud.com/n/idqvhb5g0xic/b/bucket-disk-image/o/setup-ub-2404-local.bash"
+    hardening_script_url: ""
     hardening_script_path: /tmp/setup-ub-2404-local.bash
     docker_packages:
       - docker.io
@@ -39,7 +39,7 @@
     remove_packages:
       - snapd
 
-    ZITI_CTRL_ADVERTISED_ADDRESS: "08f6a7a0-d1d8-4f26-a65c-617aaed1cdb2.production.netfoundry.io"
+    ZITI_CTRL_ADVERTISED_ADDRESS: ""
     ZITI_CTRL_ADVERTISED_PORT: "443"
     ZITI_ROUTER_ADVERTISED_ADDRESS: "{{ ansible_fqdn }}"
     ZITI_ROUTER_PORT: "443"
