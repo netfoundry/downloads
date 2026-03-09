@@ -276,6 +276,9 @@ EOF
 installDebian(){
     configureDebianRepo
 
+    export DEBIAN_FRONTEND=noninteractive
+    export NEEDRESTART_MODE=a
+
     typeset -a APT_ARGS=(install --yes)
     # allow dangerous downgrades if a version is pinned with '='
     if [[ "${*}" =~ = ]]; then
