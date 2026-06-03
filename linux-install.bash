@@ -212,7 +212,7 @@ configureDebianRepo(){
     local APT_VERSION
     local USE_DEB822="no"
     APT_VERSION=$(apt --version 2>/dev/null | awk '{ print $2 }' | head -n 1)
-    if [[ -n "$APT_VERSION" && ( "$APT_VERSION" == 2.* || "$APT_VERSION" =~ 1\.[89]* ) ]]; then
+    if [[ -n "$APT_VERSION" ]] && dpkg --compare-versions "$APT_VERSION" ge 1.1; then
         USE_DEB822="yes"
         log_info "APT version $APT_VERSION supports DEB822 format"
     else
