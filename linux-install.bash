@@ -11,7 +11,7 @@
 # License: All Rights Reserved
 # Usage: ./linux-install.bash [OPTIONS] [PACKAGE...]
 # Requirements: curl/wget, gpg, apt/dnf/yum
-# Version: 2.2.0
+# Version: 2.3.0
 ###############################################################################
 
 set -euo pipefail
@@ -47,6 +47,30 @@ REPO_USERNAME=""
 REPO_PASSWORD=""
 POST_EXEC=""
 TEST_REPO="false"
+
+# Private installs also get packages built per distribution release (e.g. Suricata for zLAN inspection):
+# deb from a release suite (these codenames), rpm from a per-EL-major repository (see configureRedHatRepo).
+NF_DEB_RELEASE_SUITES="jammy noble resolute"
+
+# Value of KEY from /etc/os-release, empty if unset; read in a subshell so nothing leaks into this script.
+osReleaseValue() {
+    [[ -r /etc/os-release ]] || return 0
+    # shellcheck disable=SC1091
+    ( . /etc/os-release && printf '%s' "${!1:-}" )
+}
+
+# Major version of a RHEL-compatible release with a per-EL repository (8, 9, 10); empty otherwise
+# (Fedora, Amazon Linux and other releases are not published to).
+elMajorVersion() {
+    local IDS MAJOR
+    IDS=" $(osReleaseValue ID) $(osReleaseValue ID_LIKE) "
+    [[ "$IDS" == *" rhel "* ]] || return 0
+    MAJOR="$(osReleaseValue VERSION_ID)"
+    MAJOR="${MAJOR%%.*}"
+    case "$MAJOR" in
+        8|9|10) printf '%s' "$MAJOR" ;;
+    esac
+}
 
 checkSum() {
     for CMD in sha256sum md5sum; do
@@ -94,6 +118,33 @@ enabled=1
 gpgcheck=0
 gpgkey=https://${NF_REPO_HOST}/artifactory/api/security/keypair/public/repositories/${NFPAX_RPM}
 repo_gpgcheck=1"
+
+    # Private installs also get the repository for this EL major (packages built per release, e.g. Suricata
+    # for zLAN inspection). It is a public repository, so no credentials. Its packages keep their upstream
+    # signatures, hence gpgcheck with the COPR and EPEL keys mirrored alongside them. skip_if_unavailable keeps
+    # dnf working where a release is not published (yet).
+    if [[ "$PRIVATE_REPO" == "true" ]]; then
+        local EL_MAJOR
+        EL_MAJOR="$(elMajorVersion)"
+        if [[ -n "$EL_MAJOR" ]]; then
+            local EL_URL="https://${NF_REPO_HOST}/artifactory/${NFPAX_RPM_EL}"
+            REPOSRC+="
+
+[NetFoundryReleaseEL]
+name=NetFoundry Release (EL${EL_MAJOR})
+baseurl=${EL_URL}/el${EL_MAJOR}/\$basearch
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+skip_if_unavailable=1
+gpgkey=https://${NF_REPO_HOST}/artifactory/api/security/keypair/public/repositories/${NFPAX_RPM_EL}
+       ${EL_URL}/keys/RPM-GPG-KEY-copr-oisf-suricata-8.0
+       ${EL_URL}/keys/RPM-GPG-KEY-EPEL-${EL_MAJOR}"
+            log_info "Adding EL${EL_MAJOR} repository from ${NFPAX_RPM_EL}"
+        else
+            log_info "No EL release repository for this distribution, skipping"
+        fi
+    fi
 
     if [ -s "$REPOFILE" ]; then
         log_info "Existing repository file found, checking for updates..."
@@ -223,6 +274,32 @@ configureDebianRepo(){
     local REPO_BASE_NAME="netfoundry-release"
     local REPO_URL="https://${NF_REPO_HOST}/artifactory/${NFPAX_DEB}"
 
+    # Private installs also get this release's own suite (packages built per release, e.g. Suricata for zLAN
+    # inspection), but only for releases we publish to and only if the repository serves the suite: a listed
+    # suite without a Release file makes apt-get update fail for every package installed with this script.
+    local RELEASE_SUITE=""
+    if [[ "$PRIVATE_REPO" == "true" ]]; then
+        local CODENAME
+        CODENAME="$(osReleaseValue UBUNTU_CODENAME)"
+        [[ -n "$CODENAME" ]] || CODENAME="$(osReleaseValue VERSION_CODENAME)"
+        if [[ -n "$CODENAME" && " ${NF_DEB_RELEASE_SUITES} " == *" ${CODENAME} "* ]]; then
+            local -a PROBE
+            read -ra PROBE <<< "$GETTERCMD"
+            case "$GETTER" in
+                curl) PROBE+=(-u "${REPO_USERNAME}:${REPO_PASSWORD}") ;;
+                wget) PROBE+=("--user=${REPO_USERNAME}" "--password=${REPO_PASSWORD}") ;;
+            esac
+            if "${PROBE[@]}" "${REPO_URL}/dists/${CODENAME}/InRelease" >/dev/null 2>&1; then
+                RELEASE_SUITE="$CODENAME"
+                log_info "Adding release suite ${CODENAME}"
+            else
+                log_info "Release suite ${CODENAME} is not available in ${NFPAX_DEB}, skipping"
+            fi
+        else
+            log_info "No release suite for '${CODENAME:-unknown}', skipping"
+        fi
+    fi
+
     # Remove old repository files (both formats)
     log_info "Cleaning up any existing repository files..."
     rm -f "${REPODIR}/${REPO_BASE_NAME}.list" "${REPODIR}/${REPO_BASE_NAME}.sources"
@@ -232,7 +309,7 @@ configureDebianRepo(){
         local REPOFILE="${REPODIR}/${REPO_BASE_NAME}.sources"
         local REPO_SUITES="debian"
         if [[ "$PRIVATE_REPO" == "true" ]]; then
-            REPO_SUITES="debian stable"
+            REPO_SUITES="debian stable${RELEASE_SUITE:+ ${RELEASE_SUITE}}"
         fi
         cat > "$REPOFILE" << EOF
 Types: deb
@@ -250,6 +327,9 @@ EOF
         if [[ "$PRIVATE_REPO" == "true" ]]; then
             local REPOSRC_STABLE="deb [signed-by=/usr/share/keyrings/netfoundry.gpg] ${REPO_URL} stable main"
             echo "$REPOSRC_STABLE" >> "$REPOFILE"
+            if [[ -n "$RELEASE_SUITE" ]]; then
+                echo "deb [signed-by=/usr/share/keyrings/netfoundry.gpg] ${REPO_URL} ${RELEASE_SUITE} main" >> "$REPOFILE"
+            fi
         fi
         log_info "Added NetFoundry repository configuration (legacy format)"
     fi
@@ -393,9 +473,11 @@ main(){
         if [[ "$TEST_REPO" == "true" ]]; then
             NFPAX_RPM="${NFPAX_RPM:-nfpax-private-rpm-test}"
             NFPAX_DEB="${NFPAX_DEB:-nfpax-private-deb-test}"
+            NFPAX_RPM_EL="${NFPAX_RPM_EL:-nfpax-public-rpm-test}"
         else
             NFPAX_RPM="${NFPAX_RPM:-nfpax-private-rpm-stable}"
             NFPAX_DEB="${NFPAX_DEB:-nfpax-private-deb-stable}"
+            NFPAX_RPM_EL="${NFPAX_RPM_EL:-nfpax-public-rpm-stable}"
         fi
     else
         if [[ "$TEST_REPO" == "true" ]]; then
